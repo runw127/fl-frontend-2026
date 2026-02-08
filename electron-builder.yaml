@@ -1,0 +1,82 @@
+appId: com.bloodcount.app
+productName: BloodCounts!
+copyright: Copyright © 2024
+
+# Directories
+directories:
+  output: dist
+  buildResources: build
+
+# Include standalone build and public assets
+files:
+  - "electron/**/*"
+  - ".next/standalone/**/*"
+  - ".next/static/**/*"
+  - "public/**/*"
+  - "package.json"
+  - ".env.local"
+  # Exclude unnecessary files
+  - "!**/*.map"
+  - "!**/README.md"
+  - "!**/CHANGELOG.md"
+
+# Don't use asar - Next.js needs file access
+asar: false
+
+# Copy static files to the right place after build
+extraResources:
+  - from: ".next/static"
+    to: "app/.next/standalone/.next/static"
+  - from: "public"
+    to: "app/.next/standalone/public"
+
+# macOS configuration  
+mac:
+  category: public.app-category.medical
+  target:
+    - target: dmg
+      arch:
+        - arm64
+    - target: zip
+      arch:
+        - arm64
+  icon: public/images/logo/512.png
+  darkModeSupport: true
+
+# DMG configuration
+dmg:
+  contents:
+    - x: 130
+      y: 220
+    - x: 410
+      y: 220
+      type: link
+      path: /Applications
+
+# Linux configuration
+linux:
+  target:
+    - target: AppImage
+      arch:
+        - x64
+    - target: deb
+      arch:
+        - x64
+  category: Medical
+  icon: public/images/logo/512.png
+  synopsis: Blood Count Analysis Application
+  description: A comprehensive blood count analysis and tracking application
+
+appImage:
+  artifactName: ${productName}-${version}-${arch}.AppImage
+
+deb:
+  depends:
+    - libgtk-3-0
+    - libnotify4
+    - libnss3
+    - libxss1
+    - libxtst6
+    - xdg-utils
+    - libatspi2.0-0
+    - libuuid1

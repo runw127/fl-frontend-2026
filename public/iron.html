@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="utf-8" />
+  <title>UK FedMAP Performance Map</title>
+  <meta name="viewport" content="initial-scale=1,maximum-scale=1,user-scalable=no" />
+  <link href="https://api.mapbox.com/mapbox-gl-js/v3.14.0/mapbox-gl.css" rel="stylesheet" />
+  <script src="https://api.mapbox.com/mapbox-gl-js/v3.14.0/mapbox-gl.js"></script>
+  <script src="https://unpkg.com/topojson-client@3"></script>
+  <script src="https://unpkg.com/@turf/turf@6/turf.min.js"></script>
+  <style>
+    body { margin: 0; padding: 0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji"; }
+    #map { position: absolute; top: 0; bottom: 0; width: 100%; }
+    .legend, .title-overlay { position: absolute; background: rgba(255, 255, 255, 0.95); padding: 20px; border-radius: 15px; box-shadow: 0 10px 30px rgba(0,0,0,.2); backdrop-filter: blur(10px); z-index: 1000; }
+    .legend { top: 20px; right: 20px; min-width: 320px; }
+    .title-overlay { top: 20px; left: 20px; }
+    .title-overlay h1 { margin: 0 0 6px 0; font-weight: 600; font-size: 1.4rem; color: #2c3e50; }
+    .title-overlay p { margin: 0; color: #7f8c8d; font-size: .95rem; }
+    .gradient-bar { height: 20px; border-radius: 10px; margin: 10px 0; border: 1px solid #ddd;
+      background: linear-gradient(to right, rgba(222,235,247,.9), rgba(158,202,225,.9), rgba(49,130,189,.9), rgba(8,81,156,.9), rgba(8,48,107,.9)); }
+    .scale-labels { display: flex; justify-content: space-between; font-size: .8em; color: #5a6c7d; margin-bottom: 12px; }
+    .info-panel { background: #f8f9fa; border-radius: 10px; padding: 12px; border-left: 4px solid #3498db; }
+    .region-name { font-weight: 700; color: #2c3e50; margin-bottom: 6px; }
+    .stats { font-size: .9em; color: #5a6c7d; line-height: 1.5; }
+    .controls { position: absolute; bottom: 20px; left: 20px; display: flex; gap: 10px; z-index: 1000; align-items: center; flex-wrap: wrap; }
+    .control-btn, .control-select { background: rgba(52,152,219,.92); color: #fff; border: none; padding: 10px 14px; border-radius: 8px; cursor: pointer; font-size: .9em; transition: .2s; backdrop-filter: blur(5px); }
+    .control-btn:hover { background: rgba(41,128,185,.96); transform: translateY(-1px); }
+    .control-select { appearance: none; padding-right: 28px;
+      background-image: linear-gradient(45deg, transparent 50%, #fff 50%), linear-gradient(135deg, #fff 50%, transparent 50%), linear-gradient(to right, rgba(255,255,255,.2), rgba(255,255,255,.2));
+      background-position: calc(100% - 16px) 55%, calc(100% - 10px) 55%, 0 0; background-size: 6px 6px, 6px 6px, 100% 100%; background-repeat: no-repeat; color: #fff; }
+    .loading { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(255, 255, 255, .9); padding: 20px; border-radius: 10px; z-index: 2000; }
+    .mapboxgl-popup-content { border-radius: 12px; box-shadow: 0 10px 25px rgba(0,0,0,.3); border: none; }
+    .mapboxgl-popup-tip { border-top-color: rgba(255,255,255,.95); }
+    @media (max-width:768px){
+      .legend, .title-overlay { position: relative; margin: 10px; width: calc(100% - 20px); }
+      .controls { position: relative; bottom: auto; left: auto; margin: 10px; justify-content: center; }
+      #map { position: relative; height: 70vh; }
+    }
+  </style>
+</head>
+
+<body>
+  <div id="map"></div>
+  <div class="loading" id="loading">Loading UK regions…</div>
+
+  <div class="title-overlay">
+    <h1>FedMAP Performance</h1>
+    <p>UK Regional ROC AUC — <strong id="method-label">Individual</strong></p>
+  </div>
+
+  <div class="legend">
+    <h3>Performance Scale (Fixed)</h3>
+    <div class="gradient-bar"></div>
+    <div class="scale-labels" id="scale-labels">
+      <span>—</span><span>—</span><span>—</span><span>—</span>
+    </div>
+    <div class="info-panel" id="region-info">
+      <div class="region-name">Loading regions…</div>
+      <div class="stats">Please wait while we load the geographic boundaries</div>
+    </div>
+  </div>
+
+  <div class="controls">
+    <button class="control-btn" onclick="focusUK()">Focus UK</button>
+    <button class="control-btn" onclick="showBestRegion()">Best Region</button>
+    <select class="control-select" id="method-select" onchange="setMethod(this.value)"></select>
+    <button class="control-btn" onclick="toggleLabels()">Toggle Labels</button>
+  </div>
+
+  <script>
+    /* =========================
+       NEW: Per-location ROC AUCs (IDs preserved) grouped by NHS region
+       ========================= */
+    const locationsByRegion = {
+      "Yorkshire & The Humber": [
+        { "id": 1, "name": "Leeds - City", "lat": 53.799377, "lng": -1.546187, "roc_auc_individual": 0.869414, "roc_auc_fl": 0.867386 },
+        { "id": 2, "name": "Bradford", "lat": 53.797090, "lng": -1.757609, "roc_auc_individual": 0.841972, "roc_auc_fl": 0.874873 },
+        { "id": 3, "name": "Leeds - Seacroft", "lat": 53.807071, "lng": -1.468434, "roc_auc_individual": 0.837520, "roc_auc_fl": 0.883536 },
+        { "id": 4, "name": "Sheffield", "lat": 53.382538, "lng": -1.471225, "roc_auc_individual": 0.859322, "roc_auc_fl": 0.865563 }
+      ],
+      "East Midlands": [
+        { "id": 5, "name": "Leicester", "lat": 52.638250, "lng": -1.137613, "roc_auc_individual": 0.825829, "roc_auc_fl": 0.855037 },
+        { "id": 6, "name": "Nottingham", "lat": 52.957259, "lng": -1.149686, "roc_auc_individual": 0.849411, "roc_auc_fl": 0.860404 }
+      ],
+      "West Midlands": [
+        { "id": 7, "name": "Stoke", "lat": 53.022948, "lng": -2.194908, "roc_auc_individual": 0.852047, "roc_auc_fl": 0.882846 },
+        { "id": 8, "name": "Birmingham", "lat": 52.479469, "lng": -1.901186, "roc_auc_individual": 0.811966, "roc_auc_fl": 0.844571 }
+      ],
+      "North West": [
+        { "id": 9, "name": "Manchester - Norfolk House", "lat": 53.482047, "lng": -2.241998, "roc_auc_individual": 0.868143, "roc_auc_fl": 0.880025 },
+        { "id": 12, "name": "Lancaster", "lat": 54.042444, "lng": -2.800182, "roc_auc_individual": 0.813920, "roc_auc_fl": 0.830729 },
+        { "id": 13, "name": "Manchester - Plymouth Grove", "lat": 53.463897, "lng": -2.224778, "roc_auc_individual": 0.842330, "roc_auc_fl": 0.849754 },
+        { "id": 14, "name": "Liverpool", "lat": 53.408236, "lng": -2.988419, "roc_auc_individual": 0.840211, "roc_auc_fl": 0.864396 }
+      ],
+      "North East": [
+        { "id": 15, "name": "Newcastle", "lat": 54.980466, "lng": -1.632540, "roc_auc_individual": 0.776582, "roc_auc_fl": 0.843009 }
+      ],
+      "South West": [
+        { "id": 16, "name": "Southmead (Bristol)", "lat": 51.498473, "lng": -2.595607, "roc_auc_individual": 0.865602, "roc_auc_fl": 0.891453 },
+        { "id": 21, "name": "Gloucester", "lat": 51.868342, "lng": -2.236308, "roc_auc_individual": 0.838922, "roc_auc_fl": 0.896647 },
+        { "id": 22, "name": "Plymouth", "lat": 50.415971, "lng": -4.111990, "roc_auc_individual": 0.898744, "roc_auc_fl": 0.908641 }
+      ],
+      "London": [
+        { "id": 17, "name": "Tooting", "lat": 51.427513, "lng": -0.176113, "roc_auc_individual": 0.833600, "roc_auc_fl": 0.867584 },
+        { "id": 23, "name": "Edgware", "lat": 51.60628653824557, "lng": -0.2726055440963822, "roc_auc_individual": 0.883951, "roc_auc_fl": 0.886647 },
+        { "id": 25, "name": "West End", "lat": 51.516697, "lng": -0.141717, "roc_auc_individual": 0.860181, "roc_auc_fl": 0.888240 }
+      ],
+      "South Central": [
+        { "id": 18, "name": "Southampton", "lat": 50.933895, "lng": -1.436580, "roc_auc_individual": 0.883792, "roc_auc_fl": 0.886748 },
+        { "id": 19, "name": "Oxford", "lat": 51.764236, "lng": -1.217994, "roc_auc_individual": 0.808200, "roc_auc_fl": 0.867583 },
+        { "id": 20, "name": "Poole", "lat": 50.718986, "lng": -1.980975, "roc_auc_individual": 0.876346, "roc_auc_fl": 0.881248 }
+      ],
+      "East of England": [
+        { "id": 10, "name": "Cambridge", "lat": 52.177162, "lng": 0.140516, "roc_auc_individual": 0.834981, "roc_auc_fl": 0.864773 },
+        { "id": 11, "name": "Brentwood", "lat": 51.623413, "lng": 0.318132, "roc_auc_individual": 0.811285, "roc_auc_fl": 0.835423 },
+        { "id": 24, "name": "Luton", "lat": 51.881231, "lng": -0.417344, "roc_auc_individual": 0.860181, "roc_auc_fl": 0.888240 }
+      ]
+    };
+
+    /* =========================
+       Admin mapping + aggregation
+       ========================= */
+    function toAdminName(name) {
+      if (name === 'South East Coast' || name === 'South Central') return 'South East'; // map both to EER "South East"
+      if (name === 'Yorkshire & The Humber') return 'Yorkshire and The Humber';
+      if (name === 'East of England') return 'Eastern';
+      return name;
+    }
+
+    // Flatten to [{admin, value_individual, value_fl, ...}]
+    const flat = Object.entries(locationsByRegion).flatMap(([region, arr]) => {
+      const admin = toAdminName(region);
+      return arr.map(d => ({
+        ...d,
+        admin,
+        value_individual: d.roc_auc_individual,
+        value_fl: d.roc_auc_fl
+      }));
+    });
+
+    function mean(a){ return a.reduce((x,y)=>x+y,0)/(a.length||1); }
+    function median(a){ if(!a.length) return 0; const s=[...a].sort((x,y)=>x-y); const m=Math.floor(s.length/2); return s.length%2? s[m] : (s[m-1]+s[m])/2; }
+    function std(a){ if(a.length<=1) return 0; const m=mean(a); return Math.sqrt(mean(a.map(v=>(v-m)*(v-m)))); }
+
+    // Build region stats for a method: "Individual" or "FL"
+    function aggregateForMethod(methodName){
+      const key = methodName === 'FL' ? 'value_fl' : 'value_individual';
+      const buckets = {};
+      flat.forEach(d => {
+        if(!buckets[d.admin]) buckets[d.admin]=[];
+        buckets[d.admin].push(d[key]);
+      });
+      const out = {};
+      Object.entries(buckets).forEach(([admin, vals])=>{
+        out[admin] = { mean: mean(vals), median: median(vals), std: std(vals) };
+      });
+      return out;
+    }
+
+    /* =========================
+       Global colour scale across BOTH methods
+       ========================= */
+    let GLOBAL_MIN = Infinity, GLOBAL_MAX = -Infinity;
+    function computeGlobalScale(){
+      ['Individual','FL'].forEach(m=>{
+        const stats = aggregateForMethod(m);
+        Object.values(stats).forEach(d=>{
+          if(typeof d.median === 'number' && !isNaN(d.median)){
+            if(d.median<GLOBAL_MIN) GLOBAL_MIN=d.median;
+            if(d.median>GLOBAL_MAX) GLOBAL_MAX=d.median;
+          }
+        });
+      });
+      if(!isFinite(GLOBAL_MIN)||!isFinite(GLOBAL_MAX)||GLOBAL_MIN===GLOBAL_MAX){ GLOBAL_MIN=0; GLOBAL_MAX=1; }
+    }
+    computeGlobalScale();
+
+    function dataExtent(){ return [GLOBAL_MIN, GLOBAL_MAX]; }
+    function updateLegendTicks(){
+      const [min,max]=dataExtent();
+      const ticks=[min, min+(max-min)*0.33, min+(max-min)*0.66, max].map(v=>v.toFixed(3));
+      const labels=document.getElementById('scale-labels').querySelectorAll('span');
+      labels[0].textContent=ticks[0]; labels[1].textContent=ticks[1]; labels[2].textContent=ticks[2]; labels[3].textContent=ticks[3];
+    }
+
+    function getColor(v){
+      const [min,max]=dataExtent();
+      const t=(v-min)/(max-min||1);
+      if(t>=0.8) return 'rgba(8,48,107,0.9)';
+      if(t>=0.6) return 'rgba(8,81,156,0.9)';
+      if(t>=0.4) return 'rgba(49,130,189,0.9)';
+      if(t>=0.2) return 'rgba(158,202,225,0.9)';
+      return 'rgba(222,235,247,0.9)';
+    }
+    function buildFillColorExpression(adminStats){
+      const exp=['match',['get','name']];
+      for(const [name, stats] of Object.entries(adminStats)){ exp.push(name, getColor(stats.median)); }
+      exp.push('#cccccc');
+      return exp;
+    }
+    function getPerformanceRank(medianVal){
+      if(medianVal >= 0.88) return '🏆 Excellent';
+      if(medianVal >= 0.85) return '🥈 Very Good';
+      if(medianVal >= 0.82) return '🥉 Good';
+      if(medianVal >= 0.80) return '📊 Fair';
+      return '📈 Needs Improvement';
+    }
+
+    /* =========================
+       Initial method + stats
+       ========================= */
+    let currentMethod='Individual';
+    let adminStats=aggregateForMethod(currentMethod);
+    updateLegendTicks();
+    document.getElementById('method-label').textContent=currentMethod;
+
+    /* =========================
+       Map setup
+       ========================= */
+    mapboxgl.accessToken='pk.eyJ1IjoiZmFuemhhbmc5MTYiLCJhIjoiY2pyYzNpYmNxMGd0bzN5bWw3Z3g2ZGk5ciJ9.3MsNgPflPQ1nG8XeKiqdww';
+    const map=new mapboxgl.Map({
+      container:'map', style:'mapbox://styles/mapbox/light-v11',
+      center:[-2.5,54.0], zoom:5.5, maxZoom:8, minZoom:4
+    });
+    map.addControl(new mapboxgl.NavigationControl());
+
+    let labelsVisible=true;
+    let currentPopup=null;
+    let regionCentroids={};
+
+    async function loadOfficialRegions(){
+      const url='https://raw.githubusercontent.com/martinjc/UK-GeoJSON/master/json/electoral/eng/eer.json';
+      const resp=await fetch(url);
+      if(!resp.ok) throw new Error('Failed to fetch UK-GeoJSON');
+      const geojson=await resp.json();
+
+      const features=geojson.features
+        .map(f=>{ f.properties.name=f.properties.EER13NM; return f; })
+        .filter(f=> adminStats[f.properties.name] !== undefined );
+
+      regionCentroids={};
+      features.forEach(f=>{ try{ regionCentroids[f.properties.name]=turf.centroid(f).geometry.coordinates; }catch(e){} });
+
+      return { type:'FeatureCollection', features };
+    }
+
+    function statsBothFor(adminName){
+      const sInd = aggregateForMethod('Individual')[adminName];
+      const sFL  = aggregateForMethod('FL')[adminName];
+      return { sInd, sFL };
+    }
+
+    function refreshChoropleth(){
+      updateLegendTicks();
+      if(map.getLayer('uk-regions-fill')){
+        map.setPaintProperty('uk-regions-fill','fill-color', buildFillColorExpression(adminStats));
+      }
+      document.getElementById('method-label').textContent=currentMethod;
+
+      // UK summary box: show BOTH
+      const ind = aggregateForMethod('Individual');
+      const fl  = aggregateForMethod('FL');
+      const valsInd = Object.values(ind).map(d=>d.median);
+      const valsFL  = Object.values(fl).map(d=>d.median);
+      const avgInd = valsInd.reduce((a,b)=>a+b,0)/valsInd.length;
+      const avgFL  = valsFL.reduce((a,b)=>a+b,0)/valsFL.length;
+
+      const bestInd = Object.entries(ind).sort((a,b)=>b[1].median - a[1].median)[0];
+      const bestFL  = Object.entries(fl ).sort((a,b)=>b[1].median - a[1].median)[0];
+
+      document.getElementById('region-info').innerHTML = `
+        <div class="region-name">UK Summary</div>
+        <div class="stats">
+          <strong>Individual Median Avg:</strong> ${avgInd.toFixed(4)} (Best: ${bestInd[0]} @ ${bestInd[1].median.toFixed(4)})<br>
+          <strong>FL Median Avg:</strong> ${avgFL.toFixed(4)} (Best: ${bestFL[0]} @ ${bestFL[1].median.toFixed(4)})<br>
+          <em>Click a region for details</em>
+        </div>`;
+    }
+
+    map.on('load', async ()=>{
+      const loading=document.getElementById('loading');
+      try{
+        const regionData=await loadOfficialRegions();
+
+        map.addSource('uk-regions',{ type:'geojson', data:regionData });
+
+        map.addLayer({
+          id:'uk-regions-fill', type:'fill', source:'uk-regions',
+          paint:{ 'fill-color': buildFillColorExpression(adminStats), 'fill-opacity':0.8 }
+        });
+        map.addLayer({
+          id:'uk-regions-border', type:'line', source:'uk-regions',
+          paint:{ 'line-color':'#2c3e50', 'line-width':1.5, 'line-opacity':0.9 }
+        });
+        map.addLayer({
+          id:'uk-regions-labels', type:'symbol', source:'uk-regions',
+          layout:{
+            'text-field': [
+              'case',
+              ['==',['get','name'],'Yorkshire and The Humber'],'Yorkshire',
+              ['==',['get','name'],'East of England'],'East England',
+              ['get','name']
+            ],
+            'text-font':['Open Sans Bold','Arial Unicode MS Bold'],
+            'text-size':11, 'text-anchor':'center'
+          },
+          paint:{ 'text-color':'#2c3e50','text-halo-color':'rgba(255,255,255,.9)','text-halo-width':2 }
+        });
+
+        refreshChoropleth();
+
+        map.on('mouseenter','uk-regions-fill',(e)=>{
+          map.getCanvas().style.cursor='pointer';
+          const regionName=e.features[0].properties.name;
+          const both=statsBothFor(regionName);
+          if(!both || !both.sInd || !both.sFL) return;
+          document.getElementById('region-info').innerHTML = `
+            <div class="region-name">${regionName}</div>
+            <div class="stats">
+              <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
+                <div>
+                  <div><strong>Individual</strong></div>
+                  <div>Median: ${both.sInd.median.toFixed(4)}</div>
+                  <div>Mean: ${both.sInd.mean.toFixed(4)}</div>
+                  <div>Std: ${both.sInd.std.toFixed(4)}</div>
+                </div>
+                <div>
+                  <div><strong>FL</strong></div>
+                  <div>Median: ${both.sFL.median.toFixed(4)}</div>
+                  <div>Mean: ${both.sFL.mean.toFixed(4)}</div>
+                  <div>Std: ${both.sFL.std.toFixed(4)}</div>
+                </div>
+              </div>
+            </div>`;
+          map.setPaintProperty('uk-regions-fill','fill-opacity',['case',['==',['get','name'],regionName],1.0,0.6]);
+        });
+
+        map.on('mouseleave','uk-regions-fill',()=>{
+          map.getCanvas().style.cursor='';
+          map.setPaintProperty('uk-regions-fill','fill-opacity',0.8);
+          refreshChoropleth();
+        });
+
+        map.on('click','uk-regions-fill',(e)=>{
+          const feature=e.features[0];
+          const regionName=feature.properties.name;
+          const both=statsBothFor(regionName);
+          if(!both) return;
+
+          if(currentPopup) currentPopup.remove();
+
+          const pos = (stats)=>Object.entries(stats).sort((a,b)=>b[1].median-a[1].median)
+                          .findIndex(([n])=>n===regionName)+1;
+          const rankInd = pos(aggregateForMethod('Individual'));
+          const rankFL  = pos(aggregateForMethod('FL'));
+
+          currentPopup = new mapboxgl.Popup({ closeButton:true, closeOnClick:true })
+            .setLngLat(e.lngLat)
+            .setHTML(`
+              <div style="padding:14px; min-width:300px;">
+                <h4 style="margin:0 0 12px 0; color:#2c3e50; border-bottom:2px solid #3498db; padding-bottom:6px;">
+                  ${regionName}
+                </h4>
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                  <div>
+                    <div style="color:#7f8c8d; font-size:.85em;">Individual (Rank #${rankInd})</div>
+                    <div><strong>Median:</strong> ${both.sInd.median.toFixed(4)}</div>
+                    <div><strong>Mean:</strong> ${both.sInd.mean.toFixed(4)}</div>
+                    <div><strong>Std:</strong> ${both.sInd.std.toFixed(4)}</div>
+                    <div><strong>Perf:</strong> ${getPerformanceRank(both.sInd.median)}</div>
+                  </div>
+                  <div>
+                    <div style="color:#7f8c8d; font-size:.85em;">FL (Rank #${rankFL})</div>
+                    <div><strong>Median:</strong> ${both.sFL.median.toFixed(4)}</div>
+                    <div><strong>Mean:</strong> ${both.sFL.mean.toFixed(4)}</div>
+                    <div><strong>Std:</strong> ${both.sFL.std.toFixed(4)}</div>
+                    <div><strong>Perf:</strong> ${getPerformanceRank(both.sFL.median)}</div>
+                  </div>
+                </div>
+                <div style="background:#f8f9fa; padding:10px; border-radius:8px; font-size:.85em; color:#5a6c7d; margin-top:10px;">
+                  <strong>Analysis:</strong> ${getAnalysis(both.sInd, both.sFL)}
+                </div>
+              </div>
+            `).addTo(map);
+        });
+
+      }catch(e){
+        console.error(e);
+        document.getElementById('region-info').innerHTML = `
+          <div class="region-name">Couldn’t load boundaries</div>
+          <div class="stats">Please check your network or try again.</div>`;
+      }finally{
+        document.getElementById('loading').style.display='none';
+      }
+    });
+
+    /* =========================
+       UI controls
+       ========================= */
+    function getAnalysis(ind, fl){
+      const varTxt = (s)=> s.std < 0.03 ? 'very consistent' : s.std < 0.06 ? 'consistent' : 'variable';
+      const better = fl.median - ind.median;
+      const delta  = (better>=0?'+':'') + better.toFixed(4);
+      return `FL vs Individual median: ${delta}. Individual is ${varTxt(ind)}; FL is ${varTxt(fl)}.`;
+    }
+
+    function focusUK(){ map.fitBounds([[-8.0,49.5],[2.5,60.0]], { padding:50, duration:1200 }); }
+
+    function showBestRegion(){
+      const stats = aggregateForMethod(currentMethod);
+      const best = Object.entries(stats).sort((a,b)=>b[1].median-a[1].median)[0];
+      const name=best[0], d=best[1];
+      alert(`🏆 Best Performing Region: ${name} (${currentMethod})\n\nMedian: ${d.median.toFixed(4)}\nMean: ${d.mean.toFixed(4)}\nStd Dev: ${d.std.toFixed(4)}`);
+      const center=regionCentroids[name]||[-0.1,51.5];
+      map.flyTo({ center, zoom: 6.5, duration:1800 });
+    }
+
+    function toggleLabels(){
+      labelsVisible=!labelsVisible;
+      map.setLayoutProperty('uk-regions-labels','visibility', labelsVisible?'visible':'none');
+    }
+
+    // Populate method picker with just Individual vs FL
+    const methodSelect=document.getElementById('method-select');
+    ['Individual','FL'].forEach(m=>{
+      const opt=document.createElement('option');
+      opt.value=m; opt.textContent=m; if(m==='Individual') opt.selected=true; methodSelect.appendChild(opt);
+    });
+
+    function setMethod(m){
+      currentMethod=m;
+      adminStats=aggregateForMethod(currentMethod);
+      refreshChoropleth();
+      if(currentPopup){ currentPopup.remove(); currentPopup=null; }
+    }
+
+    document.getElementById('method-label').textContent=currentMethod;
+
+    // Keyboard shortcuts
+    document.addEventListener('keydown', e=>{
+      if(e.key==='f'||e.key==='F') focusUK();
+      if(e.key==='b'||e.key==='B') showBestRegion();
+      if(e.key==='l'||e.key==='L') toggleLabels();
+    });
+  </script>
+</body>
+</html>
