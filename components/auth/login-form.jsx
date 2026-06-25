@@ -40,7 +40,7 @@ const LogInForm = () => {
     resolver: zodResolver(schema),
     mode: "all",
     defaultValues: {
-      email: "demo@bloodcounts.org",
+      email: "demo@pharosai.co.uk",
       password: "password",
     },
   });
