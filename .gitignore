@@ -53,3 +53,5 @@ Thumbs.db
 *.wmv
 yarn.lock
 package-lock.json
+
+.env.local
